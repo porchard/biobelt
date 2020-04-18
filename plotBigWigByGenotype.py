@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 
 import sys
+import re
 from pathlib import Path
 
 import docopt
@@ -22,7 +23,7 @@ Sample names are specified by Bigwig files and must exist in VCF file.
 
 Usage:
     plotBigWigByGenotype.py --vcf=<vcf> --pos=<pos>
-        [--output=<file> --left_pad=<w> --right_pad=<w> --debug] <bigwig>...
+        [--output=<file> --left_pad=<w> --right_pad=<w> --debug --sample_regex=<regex> --ymax=<y>] <bigwig>...
 
 Options:
     -h, --help         Show help.
@@ -32,11 +33,13 @@ Options:
     --right_pad=<w>    Right window around SNP to plot (in bases) [default: 1000]
     --output=<file>    Output directory where PDF files are written. [default: output.pdf]
     --bigwig           Bigwig files corresponding to each sample.
+    --ymax=<y>             Maximum y-limit. [default: auto]
+    --sample_regex=<regex>     Regex to extract sample names from filenames [default: .*]
     --debug            Talk more.
 """
 
 
-colors = plt.cm.magma(np.linspace(0, 1, 3))
+colors = ["#BA4225", "#424C2C", "#B8A159", "#B2684D"]
 mpl.rcParams['axes.prop_cycle'] = cycler(color=colors)
 mpl.rcParams["savefig.pad_inches"] = 0
 mpl.rc("font", size=14)
@@ -50,8 +53,8 @@ label = {100: "bp", 1000: "kb", 100000: "kb", 1000000: "mb"}
 
 @ticker.FuncFormatter
 def x_tick_formatter(x, pos):
-    return humanize.filesize.naturalsize(x, binary=True, format="%.2f").replace(
-        "iB", "b"
+    return humanize.filesize.naturalsize(x, format="%.2f").replace(
+        "B", "b"
     )
 
 
@@ -123,13 +126,18 @@ if __name__ == "__main__":
     opts["--pos"] = Path(opts["--pos"]).absolute()
     opts["--left_pad"] = int(opts["--left_pad"])
     opts["--right_pad"] = int(opts["--right_pad"])
+    print(opts)
+    opts["--sample_regex"] = re.compile(opts["--sample_regex"])
     debug = opts["--debug"]
+    y_max = None
+    if opts["--ymax"] != "auto":
+        y_max = int(opts["--ymax"])
 
     for i, k in enumerate(opts["<bigwig>"]):
         opts["<bigwig>"][i] = Path(k).absolute()
 
     check_args(opts)
-    sample_ids = [x.stem for x in opts["<bigwig>"]]
+    sample_ids = [re.match(opts["--sample_regex"], x.stem)[1] for x in opts["<bigwig>"]]
 
     try:
         vcf_file = vcfpy.Reader.from_path(opts["--vcf"], parsed_samples=sample_ids)
@@ -147,7 +155,7 @@ if __name__ == "__main__":
     data = {}
     bar = tqdm(total=len(sample_ids) + len(positions))
     for _, sample in enumerate(opts["<bigwig>"]):
-        sample_id = sample.stem
+        sample_id = re.match(opts["--sample_regex"], sample.stem)[1]
         if debug:
             print(f"info: processing sample {sample_id}")
         bw = BigwigObj(str(sample))
@@ -165,7 +173,8 @@ if __name__ == "__main__":
             if debug:
                 print(f"info: querying {pos}..")
             # NOTE: 0-based query (but VCF is 1-based)
-            query = vcf_file.fetch(pos[0].replace("chr", ""), pos[1], pos[2])
+            # TODO: Check consistency of chr/no-chr for the chromosome field
+            query = vcf_file.fetch(pos[0], pos[1], pos[2])
             for record in query:
                 if not record.is_snv():
                     print("info: not a SNV!")
@@ -173,6 +182,7 @@ if __name__ == "__main__":
                 info = record.INFO
                 sample_call = record.call_for_sample.get(sample_id)
                 if debug:
+                    print(sample_call)
                     print(
                         f"info: found: {record.CHROM}:{record.POS},"
                         f" ref/alt: {record.REF}/{record.ALT[0].value},"
@@ -193,7 +203,7 @@ if __name__ == "__main__":
         bar.update(1)
 
     fig, axs = plt.subplots(
-        nrows=len(positions), ncols=1, figsize=(10, 3 * len(positions))
+        nrows=len(positions), ncols=1, figsize=(10, 3 * len(positions)), squeeze=False
     )
 
     for i, pos in enumerate(positions):
@@ -205,15 +215,19 @@ if __name__ == "__main__":
             int(pos[2]) - opts["--left_pad"],
             int(pos[2]) + opts["--right_pad"] + 1,
         )
-        y_range = (0, 2)
 
         # Collect genotype signals from all samples
         for _, v in data.items():
             if key in v:
                 vals = v[key]
-                if vals["gt"] not in genotype_signal:
-                    genotype_signal[vals["gt"]] = []
-                genotype_signal[vals["gt"]].append(vals["signal_values"])
+                if vals["gt_type"] not in genotype_signal:
+                    genotype_signal[vals["gt_type"]] = []
+                genotype_signal[vals["gt_type"]].append(vals["signal_values"])
+
+        # Sort so that lowest signal track is in the front of the plot
+        genotype_signal = {
+            k: v for k, v in sorted(genotype_signal.items(), key=lambda item: np.sum(item[0]))
+        }
 
         for k, v in genotype_signal.items():
             # NOTE: Add signal across samples for each genotype and average
@@ -221,29 +235,33 @@ if __name__ == "__main__":
             genotype_signal[k] = np.sum(v, axis=0) / len(v)
 
             # Make an area plot with genotype as legend
-            axs[i].fill_between(
+            axs[i, 0].fill_between(
                 range(*x_range),
                 genotype_signal[k],
-                alpha=0.5,
                 label=k
             )
 
         # Prettify plots
-        axs[i].legend(loc=0, frameon=False)
-        axs[i].get_yaxis().set_visible(False)
-        axs[i].spines["top"].set_visible(False)
-        axs[i].spines["right"].set_visible(False)
-        axs[i].spines["left"].set_visible(False)
-        axs[i].set_xlim(*x_range)
-        axs[i].set_ylim(*y_range)
-        axs[i].set_title(key)
+        axs[i, 0].legend(loc=0, frameon=False)
+        #axs[i, 0].get_yaxis().set_visible(True)
+        yticks = axs[i, 0].get_yticks()
+        axs[i, 0].set_yticks([yticks[0], yticks[-1]])
+        axs[i, 0].yaxis.set_major_locator(ticker.MaxNLocator(nbins=1))
+        axs[i, 0].spines["right"].set_visible(False)
+        axs[i, 0].spines["top"].set_visible(False)
+        axs[i, 0].spines["left"].set_visible(False)
+        axs[i, 0].set_xlim(*x_range)
+        axs[i, 0].set_ylim(ymin=0)
+        if y_max:
+            axs[i, 0].set_ylim(ymax=y_max)
+        axs[i, 0].set_title(key)
 
         pad_len = len(str(opts["--right_pad"] + opts["--left_pad"])) - 1
 
-        axs[i].xaxis.set_major_locator(
+        axs[i, 0].xaxis.set_major_locator(
             ticker.MultipleLocator(base=(10 ** pad_len) * 0.5)
         )
-        axs[i].xaxis.set_major_formatter(x_tick_formatter)
+        axs[i, 0].xaxis.set_major_formatter(x_tick_formatter)
 
         # Update progress
         bar.update(1)
