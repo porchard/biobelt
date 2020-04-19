@@ -3,6 +3,7 @@
 import sys
 import re
 from pathlib import Path
+import warnings
 
 import docopt
 import humanize
@@ -14,7 +15,6 @@ import pyBigWig
 import vcfpy
 from tqdm import tqdm
 from cycler import cycler
-
 
 doc = """
 Uses VCF file, bigWig, and a set of positions to plot genome tracks for each allele.
@@ -40,22 +40,17 @@ Options:
 
 
 colors = ["#BA4225", "#424C2C", "#B8A159", "#B2684D"]
-mpl.rcParams['axes.prop_cycle'] = cycler(color=colors)
+mpl.rcParams["axes.prop_cycle"] = cycler(color=colors)
 mpl.rcParams["savefig.pad_inches"] = 0
 mpl.rc("font", size=14)
 mpl.rc("axes", titlesize=14)
 mpl.rc("legend", fontsize=15)
-mpl.rc('image', cmap='gray')
-
-
-label = {100: "bp", 1000: "kb", 100000: "kb", 1000000: "mb"}
+mpl.rc("image", cmap="gray")
 
 
 @ticker.FuncFormatter
 def x_tick_formatter(x, pos):
-    return humanize.filesize.naturalsize(x, format="%.2f").replace(
-        "B", "b"
-    )
+    return humanize.filesize.naturalsize(x, format="%.3f").replace("B", "b")
 
 
 def check_args(opts, exit=True):
@@ -126,7 +121,6 @@ if __name__ == "__main__":
     opts["--pos"] = Path(opts["--pos"]).absolute()
     opts["--left_pad"] = int(opts["--left_pad"])
     opts["--right_pad"] = int(opts["--right_pad"])
-    print(opts)
     opts["--sample_regex"] = re.compile(opts["--sample_regex"])
     debug = opts["--debug"]
     y_max = None
@@ -135,6 +129,9 @@ if __name__ == "__main__":
 
     for i, k in enumerate(opts["<bigwig>"]):
         opts["<bigwig>"][i] = Path(k).absolute()
+
+    if not debug:
+        warnings.filterwarnings("ignore")
 
     check_args(opts)
     sample_ids = [re.match(opts["--sample_regex"], x.stem)[1] for x in opts["<bigwig>"]]
@@ -226,7 +223,10 @@ if __name__ == "__main__":
 
         # Sort so that lowest signal track is in the front of the plot
         genotype_signal = {
-            k: v for k, v in sorted(genotype_signal.items(), key=lambda item: np.sum(item[0]))
+            k: v
+            for k, v in sorted(
+                genotype_signal.items(), key=lambda item: np.sum(item[0])
+            )
         }
 
         for k, v in genotype_signal.items():
@@ -235,32 +235,23 @@ if __name__ == "__main__":
             genotype_signal[k] = np.sum(v, axis=0) / len(v)
 
             # Make an area plot with genotype as legend
-            axs[i, 0].fill_between(
-                range(*x_range),
-                genotype_signal[k],
-                label=k
-            )
+            axs[i, 0].fill_between(range(*x_range), genotype_signal[k], label=k)
 
         # Prettify plots
+        axs[i, 0].set_title(key)
         axs[i, 0].legend(loc=0, frameon=False)
-        #axs[i, 0].get_yaxis().set_visible(True)
-        yticks = axs[i, 0].get_yticks()
-        axs[i, 0].set_yticks([yticks[0], yticks[-1]])
-        axs[i, 0].yaxis.set_major_locator(ticker.MaxNLocator(nbins=1))
         axs[i, 0].spines["right"].set_visible(False)
         axs[i, 0].spines["top"].set_visible(False)
-        axs[i, 0].spines["left"].set_visible(False)
+        # axs[i, 0].spines["left"].set_visible(False)
+        # axs[i, 0].get_yaxis().set_visible(True)
         axs[i, 0].set_xlim(*x_range)
         axs[i, 0].set_ylim(ymin=0)
         if y_max:
             axs[i, 0].set_ylim(ymax=y_max)
-        axs[i, 0].set_title(key)
-
-        pad_len = len(str(opts["--right_pad"] + opts["--left_pad"])) - 1
-
-        axs[i, 0].xaxis.set_major_locator(
-            ticker.MultipleLocator(base=(10 ** pad_len) * 0.5)
-        )
+        axs[i, 0].yaxis.set_major_locator(ticker.LinearLocator(2))
+        yticks = axs[i, 0].get_yticks()
+        axs[i, 0].set_yticks([yticks[-1]])
+        axs[i, 0].xaxis.set_major_locator(ticker.LinearLocator(4))
         axs[i, 0].xaxis.set_major_formatter(x_tick_formatter)
 
         # Update progress
