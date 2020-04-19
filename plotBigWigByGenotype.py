@@ -15,7 +15,7 @@ import pyBigWig
 import vcfpy
 from tqdm import tqdm
 from cycler import cycler
-
+import pygenometracks.tracks as pygtk
 
 doc = """
 Uses VCF file, bigWig, and a set of positions to plot genome tracks for each allele.
@@ -23,20 +23,23 @@ Uses VCF file, bigWig, and a set of positions to plot genome tracks for each all
 Sample names are specified by Bigwig files and must exist in VCF file.
 
 Usage:
-    plotBigWigByGenotype.py --vcf=<vcf> --pos=<pos>
-        [--output=<file> --left_pad=<w> --right_pad=<w> --debug --sample_regex=<regex> --ymax=<y>] <bigwig>...
+    plotBigWigByGenotype.py --vcf=<vcf> --pos=<pos> --bed=<bed>
+        [ --output=<file> --left_pad=<l> --right_pad=<r> --sample_regex=<regex> --ymax=<y> --debug ] <bigwig>...
 
 Options:
-    -h, --help         Show help.
-    --vcf=<vcf>        VCF file.
-    --pos=<pos>        BED file with SNP positions.
-    --left_pad=<w>     Left window around SNP to plot (in bases) [default: 1000]
-    --right_pad=<w>    Right window around SNP to plot (in bases) [default: 1000]
-    --output=<file>    Output directory where PDF files are written. [default: output.pdf]
-    --bigwig           Bigwig files corresponding to each sample.
+    -h, --help             Show help.
+    --debug                Talk more.
+
+    --vcf=<vcf>            VCF file.
+    --pos=<pos>            BED file with SNP positions.
+    --bed=<bed>            BED (12-col) containing gene models to draw.
+    --bigwig               Bigwig files corresponding to each sample.
+
+    --left_pad=<l>         Left window around SNP to plot (in bases) [default: 1000]
+    --right_pad=<r>        Right window around SNP to plot (in bases) [default: 1000]
+    --output=<file>        Output directory where PDF files are written. [default: output.pdf]
     --ymax=<y>             Maximum y-limit. [default: auto]
-    --sample_regex=<regex>     Regex to extract sample names from filenames [default: .*]
-    --debug            Talk more.
+    --sample_regex=<regex> Regex to extract sample names from filenames [default: .*]
 """
 
 
@@ -202,9 +205,20 @@ if __name__ == "__main__":
         bar.update(1)
 
     fig, axs = plt.subplots(
-        nrows=len(positions), ncols=1, figsize=(10, 3 * len(positions)), squeeze=False
+        nrows=2*len(positions), ncols=1, figsize=(10, 5 * len(positions)), squeeze=False
     )
 
+    track_config = dict(
+        file=opts["--bed"],
+        labels=True,
+        arrow_interval=15,
+        prefered_name='gene_name',
+        font_size=8,
+        style="UCSC",
+        all_labels_inside=False,
+        labels_in_margin=True,
+    )
+    tk = pygtk.BedTrack(track_config)
     for i, pos in enumerate(positions):
         key = f"{pos[0]}:{pos[2]}"
         genotype_signal = {}
@@ -214,6 +228,7 @@ if __name__ == "__main__":
             int(pos[2]) - opts["--left_pad"],
             int(pos[2]) + opts["--right_pad"] + 1,
         )
+
 
         # Collect genotype signals from all samples
         for _, v in data.items():
@@ -256,9 +271,19 @@ if __name__ == "__main__":
         axs[i, 0].xaxis.set_major_locator(ticker.LinearLocator(4))
         axs[i, 0].xaxis.set_major_formatter(x_tick_formatter)
 
+        # Add a gene model track here
+        axs[i+1, 0].set_xlim(*x_range)
+        axs[i+1, 0].spines["right"].set_visible(False)
+        axs[i+1, 0].spines["top"].set_visible(False)
+        axs[i+1, 0].spines["left"].set_visible(False)
+        axs[i+1, 0].spines["bottom"].set_visible(False)
+        axs[i+1, 0].get_yaxis().set_visible(False)
+        axs[i+1, 0].get_xaxis().set_visible(False)
+        tk.plot(axs[i+1, 0], pos[0], *x_range)
+
         # Update progress
         bar.update(1)
 
     fig.tight_layout()
-    fig.savefig(opts["--output"], dpi=300)
+    fig.savefig(opts["--output"], dpi=120)
     bar.close()
