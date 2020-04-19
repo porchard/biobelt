@@ -16,6 +16,7 @@ import vcfpy
 from tqdm import tqdm
 from cycler import cycler
 
+
 doc = """
 Uses VCF file, bigWig, and a set of positions to plot genome tracks for each allele.
 
@@ -39,7 +40,8 @@ Options:
 """
 
 
-colors = ["#BA4225", "#424C2C", "#B8A159", "#B2684D"]
+# colors = ["#ed217c", "#1b9e77", "#d95f02", "#7570b3"]
+colors = ["#1e3249", "#63c7e5", "#e2395a"]
 mpl.rcParams["axes.prop_cycle"] = cycler(color=colors)
 mpl.rcParams["savefig.pad_inches"] = 0
 mpl.rc("font", size=14)
