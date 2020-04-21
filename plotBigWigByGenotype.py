@@ -3,6 +3,7 @@
 import sys
 import re
 from pathlib import Path
+from collections import OrderedDict
 import warnings
 
 import docopt
@@ -23,8 +24,8 @@ Uses VCF file, bigWig, and a set of positions to plot genome tracks for each all
 Sample names are specified by Bigwig files and must exist in VCF file.
 
 Usage:
-    plotBigWigByGenotype.py --vcf=<vcf> --pos=<pos> --bed=<bed>
-        [ --output=<file> --left_pad=<l> --right_pad=<r> --sample_regex=<regex> --ymax=<y> --debug ] <bigwig>...
+    plotBigWigByGenotype.py --vcf=<vcf> --pos=<pos>
+        [ --bed=<bed> --output=<file> --left_pad=<l> --right_pad=<r> --sample_regex=<regex> --ymax=<y> --debug ] <bigwig>...
 
 Options:
     -h, --help             Show help.
@@ -32,25 +33,25 @@ Options:
 
     --vcf=<vcf>            VCF file.
     --pos=<pos>            BED file with SNP positions.
-    --bed=<bed>            BED (12-col) containing gene models to draw.
     --bigwig               Bigwig files corresponding to each sample.
 
-    --left_pad=<l>         Left window around SNP to plot (in bases) [default: 1000]
-    --right_pad=<r>        Right window around SNP to plot (in bases) [default: 1000]
+    --bed=<bed>            BED (12-col) with annotations if a gene track is desired.
+    --left_pad=<l>         Left window around SNP to plot (in bases) [default: 5000]
+    --right_pad=<r>        Right window around SNP to plot (in bases) [default: 5000]
     --output=<file>        Output directory where PDF files are written. [default: output.pdf]
     --ymax=<y>             Maximum y-limit. [default: auto]
     --sample_regex=<regex> Regex to extract sample names from filenames [default: .*]
 """
 
 
-# colors = ["#ed217c", "#1b9e77", "#d95f02", "#7570b3"]
-colors = ["#1e3249", "#63c7e5", "#e2395a"]
+colors = ["#440154", "#21908C", "#FDE725"] # viridis
+colors = ["#bd4952", "#c2ba4a", "#4b55c2"]
 mpl.rcParams["axes.prop_cycle"] = cycler(color=colors)
 mpl.rcParams["savefig.pad_inches"] = 0
+mpl.rcParams["legend.framealpha"] = 0
 mpl.rc("font", size=14)
 mpl.rc("axes", titlesize=14)
 mpl.rc("legend", fontsize=15)
-mpl.rc("image", cmap="gray")
 
 
 @ticker.FuncFormatter
@@ -61,16 +62,16 @@ def x_tick_formatter(x, pos):
 def check_args(opts, exit=True):
     """Check if all arguments are sane."""
     status = 0
-    if not opts["--vcf"].exists():
-        print("error: vcf file not found.", file=sys.stderr)
-        status = 1
-    if not opts["--pos"].exists():
-        print("error: bed file not found.", file=sys.stderr)
-        status = 1
+    for _, v in opts.items():
+        if isinstance(v, Path):
+            if not v.exists():
+                print("error: {v} not found.", file=sys.stderr)
+                status = 1
     for k in opts["<bigwig>"]:
         if not k.exists():
-            print(f"error: {k} file not found.", file=sys.stderr)
+            print(f"error: {k} not found.", file=sys.stderr)
             status = 1
+
     if status and exit:
         print("exit.", file=sys.stderr)
         sys.exit(status)
@@ -128,6 +129,11 @@ if __name__ == "__main__":
     opts["--right_pad"] = int(opts["--right_pad"])
     opts["--sample_regex"] = re.compile(opts["--sample_regex"])
     debug = opts["--debug"]
+
+    draw_model = opts["--bed"] is not None
+    if draw_model:
+        opts["--bed"] = Path(opts["--bed"]).absolute()
+
     y_max = None
     if opts["--ymax"] != "auto":
         y_max = int(opts["--ymax"])
@@ -154,7 +160,8 @@ if __name__ == "__main__":
     # NOTE: BED is 0-based
     positions = bed_reader(opts["--pos"])
 
-    data = {}
+    data = {}  # "sample": { "pos1": {...}, "pos2": {...} }
+
     bar = tqdm(total=len(sample_ids) + len(positions))
     for _, sample in enumerate(opts["<bigwig>"]):
         sample_id = re.match(opts["--sample_regex"], sample.stem)[1]
@@ -162,7 +169,7 @@ if __name__ == "__main__":
             print(f"info: processing sample {sample_id}")
         bw = BigwigObj(str(sample))
 
-        slot = {}
+        slot = {}  # "Position": { "gt": .., }
         for pos in positions:
             key = f"{pos[0]}:{pos[2]}"
 
@@ -183,6 +190,11 @@ if __name__ == "__main__":
                     continue
                 info = record.INFO
                 sample_call = record.call_for_sample.get(sample_id)
+                alt = record.ALT
+                if len(alt) > 1:
+                    print("warning: skipping multi-allelic variant!")
+                    continue
+
                 if debug:
                     print(sample_call)
                     print(
@@ -194,6 +206,7 @@ if __name__ == "__main__":
                 slot[key] = {
                     "gt": "/".join(sample_call.gt_bases),
                     "ref": record.REF,
+                    "alt": alt[0].value,
                     "gt_type": sample_call.gt_type,
                     "het": sample_call.is_het,
                     "pos": bw_values[0],
@@ -204,21 +217,31 @@ if __name__ == "__main__":
         data[sample_id] = slot
         bar.update(1)
 
+    fig_height = 3 * len(positions)
+    fig_width = 10
+    nrows = len(positions)
+
+    if draw_model:
+        nrows = 2*nrows
+        fig_height = 1.75*fig_height
+
     fig, axs = plt.subplots(
-        nrows=2*len(positions), ncols=1, figsize=(10, 5 * len(positions)), squeeze=False
+        nrows, 1, figsize=(fig_width, fig_height), squeeze=False
     )
 
-    track_config = dict(
-        file=opts["--bed"],
-        labels=True,
-        arrow_interval=15,
-        prefered_name='gene_name',
-        font_size=8,
-        style="UCSC",
-        all_labels_inside=False,
-        labels_in_margin=True,
-    )
-    tk = pygtk.BedTrack(track_config)
+    if draw_model:
+        track_config = dict(
+            file=opts["--bed"],
+            labels=True,
+            arrow_interval=10,
+            prefered_name='gene_name',
+            font_size=8,
+            style="UCSC",
+            all_labels_inside=False,
+            labels_in_margin=True
+        )
+        tk = pygtk.BedTrack(track_config)
+
     for i, pos in enumerate(positions):
         key = f"{pos[0]}:{pos[2]}"
         genotype_signal = {}
@@ -229,38 +252,49 @@ if __name__ == "__main__":
             int(pos[2]) + opts["--right_pad"] + 1,
         )
 
-
         # Collect genotype signals from all samples
         for _, v in data.items():
             if key in v:
                 vals = v[key]
-                if vals["gt_type"] not in genotype_signal:
-                    genotype_signal[vals["gt_type"]] = []
-                genotype_signal[vals["gt_type"]].append(vals["signal_values"])
+                if vals["gt_type"] == 0:
+                    gt_key = vals["ref"] + vals["ref"]
+                elif vals["gt_type"] == 1:
+                    gt_key = vals["ref"] + vals["alt"]
+                elif vals["gt_type"] == 2:
+                    gt_key = vals["alt"] + vals["alt"]
+                else:
+                    print("error: weird error -- check script plot logic!")
+                    sys.exit(1)
+
+                if gt_key not in genotype_signal:
+                    genotype_signal[gt_key] = []
+                genotype_signal[gt_key].append(vals["signal_values"])
 
         # Sort so that lowest signal track is in the front of the plot
-        genotype_signal = {
-            k: v
-            for k, v in sorted(
-                genotype_signal.items(), key=lambda item: np.sum(item[0])
+        # For this, we will use the sum of average signal across the region.
+        genotype_signal = OrderedDict(
+            sorted(
+                genotype_signal.items(), key=lambda item: np.sum(np.sum(item[1], axis=0)/len(item[1])),
+                reverse=True
             )
-        }
+        )
 
         for k, v in genotype_signal.items():
-            # NOTE: Add signal across samples for each genotype and average
-            # within each genotype group.
+            # Add signal across samples for each genotype and average
             genotype_signal[k] = np.sum(v, axis=0) / len(v)
 
             # Make an area plot with genotype as legend
-            axs[i, 0].fill_between(range(*x_range), genotype_signal[k], label=k)
+            axs[i, 0].fill_between(
+                range(*x_range),
+                genotype_signal[k],
+                label=f"{k} ({len(v)})"
+            )
 
         # Prettify plots
         axs[i, 0].set_title(key)
         axs[i, 0].legend(loc=0, frameon=False)
         axs[i, 0].spines["right"].set_visible(False)
         axs[i, 0].spines["top"].set_visible(False)
-        # axs[i, 0].spines["left"].set_visible(False)
-        # axs[i, 0].get_yaxis().set_visible(True)
         axs[i, 0].set_xlim(*x_range)
         axs[i, 0].set_ylim(ymin=0)
         if y_max:
@@ -268,18 +302,26 @@ if __name__ == "__main__":
         axs[i, 0].yaxis.set_major_locator(ticker.LinearLocator(2))
         yticks = axs[i, 0].get_yticks()
         axs[i, 0].set_yticks([yticks[-1]])
+        axs[i, 0].set_ylabel("ATAC-seq signal")
         axs[i, 0].xaxis.set_major_locator(ticker.LinearLocator(4))
         axs[i, 0].xaxis.set_major_formatter(x_tick_formatter)
+        axs[i, 0].axvline(x=pos[2], color='k', linestyle='--')
 
-        # Add a gene model track here
-        axs[i+1, 0].set_xlim(*x_range)
-        axs[i+1, 0].spines["right"].set_visible(False)
-        axs[i+1, 0].spines["top"].set_visible(False)
-        axs[i+1, 0].spines["left"].set_visible(False)
-        axs[i+1, 0].spines["bottom"].set_visible(False)
-        axs[i+1, 0].get_yaxis().set_visible(False)
-        axs[i+1, 0].get_xaxis().set_visible(False)
-        tk.plot(axs[i+1, 0], pos[0], *x_range)
+        leg = axs[i, 0].legend(handlelength=0)
+        leg.get_frame().set_linewidth(0.0)
+        for handle, text in zip(leg.legendHandles, leg.get_texts()):
+            text.set_color(handle.get_facecolor())
+
+        if draw_model:
+            # Add a gene model track here
+            axs[i+1, 0].set_xlim(*x_range)
+            axs[i+1, 0].spines["right"].set_visible(False)
+            axs[i+1, 0].spines["top"].set_visible(False)
+            axs[i+1, 0].spines["left"].set_visible(False)
+            axs[i+1, 0].spines["bottom"].set_visible(False)
+            axs[i+1, 0].get_yaxis().set_visible(False)
+            axs[i+1, 0].get_xaxis().set_visible(False)
+            tk.plot(axs[i+1, 0], pos[0], *x_range)
 
         # Update progress
         bar.update(1)
