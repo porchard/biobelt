@@ -25,7 +25,7 @@ Sample names are specified by Bigwig files and must exist in VCF file.
 
 Usage:
     plotBigWigByGenotype.py --vcf=<vcf> --pos=<pos>
-        [ --bed=<bed> --output=<file> --left_pad=<l> --right_pad=<r> --sample_regex=<regex> --ymax=<y> --debug ] <bigwig>...
+        [ --bed=<bed> --output=<file> --left_pad=<l> --right_pad=<r> --sample_regex=<regex> --ymax=<y> --palette=<p> --debug ] <bigwig>...
 
 Options:
     -h, --help             Show help.
@@ -36,6 +36,7 @@ Options:
     --bigwig               Bigwig files corresponding to each sample.
 
     --bed=<bed>            BED (12-col) with annotations if a gene track is desired.
+    --palette=<p>          Palette (viridis, custom, inferno)  [default: custom]
     --left_pad=<l>         Left window around SNP to plot (in bases) [default: 5000]
     --right_pad=<r>        Right window around SNP to plot (in bases) [default: 5000]
     --output=<file>        Output directory where PDF files are written. [default: output.pdf]
@@ -44,9 +45,11 @@ Options:
 """
 
 
-colors = ["#440154", "#21908C", "#FDE725"] # viridis
-colors = ["#bd4952", "#c2ba4a", "#4b55c2"]
-mpl.rcParams["axes.prop_cycle"] = cycler(color=colors)
+palettes = {
+    "viridis": ["#440154", "#21908C", "#FDE725"],  # viridis
+    "custom": ["#4F443F", "#AED4E5", "#27357E"],  # custom
+    "inferno": ["#991B1E", "#FCA50A", "#27357E"]  # inferno (viridis)
+}
 mpl.rcParams["savefig.pad_inches"] = 0
 mpl.rcParams["legend.framealpha"] = 0
 mpl.rc("font", size=14)
@@ -128,6 +131,10 @@ if __name__ == "__main__":
     opts["--left_pad"] = int(opts["--left_pad"])
     opts["--right_pad"] = int(opts["--right_pad"])
     opts["--sample_regex"] = re.compile(opts["--sample_regex"])
+    if opts["--palette"] not in palettes.keys():
+        print("info: palette not found. using custom.")
+        opts["--palette"] = 'custom'
+    mpl.rcParams["axes.prop_cycle"] = cycler(color=palettes[opts["--palette"]])
     debug = opts["--debug"]
 
     draw_model = opts["--bed"] is not None
@@ -136,7 +143,7 @@ if __name__ == "__main__":
 
     y_max = None
     if opts["--ymax"] != "auto":
-        y_max = int(opts["--ymax"])
+        y_max = float(opts["--ymax"])
 
     for i, k in enumerate(opts["<bigwig>"]):
         opts["<bigwig>"][i] = Path(k).absolute()
